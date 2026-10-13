@@ -114,12 +114,13 @@ fun CheckInDialog(
         therapists.sortedBy { it.orderIndex }
     }
     val defaultTherapist = remember(sortedTherapists) {
-        sortedTherapists.firstOrNull { it.status == TherapistStatus.AVAILABLE.name } ?: sortedTherapists.firstOrNull()
+        sortedTherapists.firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }
     }
     var selectedTherapist by remember(defaultTherapist) { mutableStateOf<TherapistEntity?>(defaultTherapist) }
     var selectedSecondaryTherapist by remember {
         mutableStateOf<TherapistEntity?>(
-            sortedTherapists.filter { it.id != defaultTherapist?.id }.firstOrNull { it.status == TherapistStatus.AVAILABLE.name }
+            sortedTherapists.filter { it.id != defaultTherapist?.id }
+                .firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }
         )
     }
 
@@ -132,7 +133,8 @@ fun CheckInDialog(
         }
     }
     val defaultRoom = remember(filteredRooms, preselectedRoom) {
-        preselectedRoom ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name } ?: filteredRooms.firstOrNull()
+        preselectedRoom?.takeIf { it.status == RoomStatus.FREE.name }
+            ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name }
     }
     var selectedRoom by remember(defaultRoom) { mutableStateOf<SpaRoomEntity?>(defaultRoom) }
 
@@ -310,8 +312,10 @@ fun CheckInDialog(
                                 .clickable {
                                     if (isSelected) {
                                         selectedTreatments.removeAll { it.id == treatment.id }
+                                        hasSteamBetween = selectedTreatments.any { it.hasSteamBetween }
                                     } else {
                                         selectedTreatments.add(treatment)
+                                        if (treatment.hasSteamBetween) hasSteamBetween = true
                                     }
                                 }
                         ) {
@@ -326,8 +330,13 @@ fun CheckInDialog(
                                     Checkbox(
                                         checked = isSelected,
                                         onCheckedChange = { checked ->
-                                            if (checked) selectedTreatments.add(treatment)
-                                            else selectedTreatments.removeAll { it.id == treatment.id }
+                                            if (checked && !isSelected) {
+                                                selectedTreatments.add(treatment)
+                                                if (treatment.hasSteamBetween) hasSteamBetween = true
+                                            } else if (!checked && isSelected) {
+                                                selectedTreatments.removeAll { it.id == treatment.id }
+                                                hasSteamBetween = selectedTreatments.any { it.hasSteamBetween }
+                                            }
                                         }
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -431,8 +440,11 @@ fun CheckInDialog(
 
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             sortedTherapists.forEachIndexed { index, therapist ->
-                                val isNextUp = index == 0 && therapist.status == TherapistStatus.AVAILABLE.name
+                                val isNextUp = therapist.id == sortedTherapists.firstOrNull {
+                                    it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday
+                                }?.id
                                 val isSelected = selectedTherapist?.id == therapist.id
+                                val isAvailable = therapist.status == TherapistStatus.AVAILABLE.name && therapist.isCheckedInToday
 
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
@@ -443,7 +455,7 @@ fun CheckInDialog(
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { selectedTherapist = therapist }
+                                        .clickable(enabled = isAvailable) { selectedTherapist = therapist }
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -525,7 +537,9 @@ fun CheckInDialog(
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clickable { selectedSecondaryTherapist = therapist }
+                                            .clickable(enabled = therapist.status == TherapistStatus.AVAILABLE.name && therapist.isCheckedInToday) {
+                                                selectedSecondaryTherapist = therapist
+                                            }
                                     ) {
                                         Row(
                                             modifier = Modifier
@@ -565,7 +579,7 @@ fun CheckInDialog(
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { selectedRoom = room }
+                                        .clickable(enabled = isFree) { selectedRoom = room }
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -585,7 +599,7 @@ fun CheckInDialog(
                                             Column {
                                                 Text(room.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
                                                 Text(
-                                                    text = if (isFree) "Available Now" else "Occupied / In Use",
+                                                    text = if (isFree) "Available Now" else room.status.lowercase().replace('_', ' '),
                                                     style = MaterialTheme.typography.bodySmall.copy(
                                                         color = if (isFree) StatusAvailableGreen else Color(0xFFC62828)
                                                     )
@@ -662,13 +676,19 @@ fun CheckInDialog(
                                     return@Button
                                 }
                                 val therapist = selectedTherapist
-                                if (therapist == null) {
-                                    errorMessage = "Please select an assigned therapist"
+                                if (therapist == null || therapist.status != TherapistStatus.AVAILABLE.name || !therapist.isCheckedInToday) {
+                                    errorMessage = "No available therapist selected. Update the daily roster or wait for a therapist."
+                                    return@Button
+                                }
+                                if (isCouple && (selectedSecondaryTherapist == null ||
+                                        selectedSecondaryTherapist?.status != TherapistStatus.AVAILABLE.name ||
+                                        selectedSecondaryTherapist?.isCheckedInToday != true)) {
+                                    errorMessage = "Select a second available therapist for this couples visit."
                                     return@Button
                                 }
                                 val room = selectedRoom
-                                if (room == null) {
-                                    errorMessage = "Please select an assigned room"
+                                if (room == null || room.status != RoomStatus.FREE.name) {
+                                    errorMessage = "No suitable room is available now. Check the Front Desk wait-time board and assign this client when a room is free."
                                     return@Button
                                 }
 

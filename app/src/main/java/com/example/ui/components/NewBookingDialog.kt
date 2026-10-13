@@ -66,7 +66,7 @@ fun NewBookingDialog(
 
     var clientName by remember { mutableStateOf("") }
     var clientPhone by remember { mutableStateOf("") }
-    var treatmentSummary by remember { mutableStateOf("Deep Tissue Massage (60m)") }
+    var treatmentSummary by remember { mutableStateOf("") }
     var durationMinutesText by remember { mutableStateOf("60") }
     var targetRoomType by remember { mutableStateOf(RoomType.SINGLE.name) }
     var selectedTherapist by remember(therapists) { mutableStateOf(therapists.firstOrNull()) }
@@ -194,14 +194,27 @@ fun NewBookingDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedTextField(
-                    value = treatmentSummary,
-                    onValueChange = { treatmentSummary = it },
-                    label = { Text("Treatment Name") },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp)
-                )
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = treatmentSummary,
+                        onValueChange = { treatmentSummary = it },
+                        label = { Text("Treatment") },
+                        modifier = Modifier.weight(1.5f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = durationMinutesText,
+                        onValueChange = { durationMinutesText = it.filter(Char::isDigit).take(3) },
+                        label = { Text("Minutes") },
+                        modifier = Modifier.weight(0.8f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -225,7 +238,7 @@ fun NewBookingDialog(
 
                 Button(
                     onClick = {
-                        if (clientName.isBlank() || selectedTherapist == null) return@Button
+                        if (clientName.isBlank() || selectedTherapist == null || (durationMinutesText.toIntOrNull() ?: 0) <= 0) return@Button
 
                         val cal = Calendar.getInstance()
                         val h = timeSlotHour.toIntOrNull() ?: 14

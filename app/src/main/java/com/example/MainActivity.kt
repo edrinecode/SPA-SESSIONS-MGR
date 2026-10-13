@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.MeetingRoom
@@ -31,6 +30,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Spa
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -158,7 +158,7 @@ fun SpaApp(viewModel: SpaViewModel = viewModel()) {
 
                         Column {
                             Text(
-                                text = "SpaFlow Desk",
+                                text = "SPA Session Manager",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = SpaDarkGreen
@@ -203,8 +203,8 @@ fun SpaApp(viewModel: SpaViewModel = viewModel()) {
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         ) {
                             Icon(
-                                Icons.Default.CloudDone,
-                                contentDescription = null,
+                                Icons.Default.Storage,
+                                contentDescription = "Offline data stored on this device",
                                 tint = StatusAvailableGreen,
                                 modifier = Modifier.size(14.dp)
                             )

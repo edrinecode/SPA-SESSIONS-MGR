@@ -37,7 +37,7 @@ class SpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private val _selectedBranchId = MutableStateFlow("branch_downtown")
+    private val _selectedBranchId = MutableStateFlow("branch_main")
     val selectedBranchId: StateFlow<String> = _selectedBranchId.asStateFlow()
 
     val branches: StateFlow<List<BranchEntity>> = repository.getAllBranches()
@@ -128,6 +128,11 @@ class SpaViewModel(application: Application) : AndroidViewModel(application) {
             }.collect { branchId ->
                 refreshWaitTimeEstimate(branchId)
             }
+        }
+        // Expire room turnover locally; no server or network connection is required.
+        viewModelScope.launch {
+            combine(currentTimeEpoch, _selectedBranchId) { now, branchId -> now to branchId }
+                .collect { (now, branchId) -> repository.releaseRoomsAfterCleaning(branchId, now) }
         }
     }
 
