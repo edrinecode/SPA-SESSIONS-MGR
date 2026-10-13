@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
@@ -50,10 +52,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.BranchSettingsEntity
@@ -69,6 +73,7 @@ import com.example.ui.theme.SpaDeepForest
 import com.example.ui.theme.SpaGoldDark
 import com.example.ui.theme.SpaMist
 import com.example.ui.theme.StatusAvailableGreen
+import com.example.ui.theme.StatusFinishingSoonAmber
 import com.example.ui.theme.StatusSteamTeal
 
 @Composable
@@ -81,6 +86,7 @@ fun CheckInDialog(
     treatments: List<TreatmentEntity>,
     settings: BranchSettingsEntity?,
     onDismiss: () -> Unit,
+    onOpenAddTherapist: (() -> Unit)? = null,
     onConfirmCheckIn: (
         clientName: String,
         clientPhone: String,
@@ -109,20 +115,43 @@ fun CheckInDialog(
     var hasPreSteam by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
 
-    // Next therapist in turn (orderIndex lowest among available)
+    // Sorted therapists by rotation order
     val sortedTherapists = remember(therapists) {
         therapists.sortedBy { it.orderIndex }
     }
-    val defaultTherapist = remember(sortedTherapists) {
-        sortedTherapists.firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }
-    }
-    var selectedTherapist by remember(defaultTherapist) { mutableStateOf<TherapistEntity?>(defaultTherapist) }
-    var selectedSecondaryTherapist by remember {
-        mutableStateOf<TherapistEntity?>(
-            sortedTherapists.filter { it.id != defaultTherapist?.id }
-                .firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }
+
+    // Stable selection using therapist IDs so timer recompositions never wipe user selection
+    var selectedTherapistId by remember {
+        mutableStateOf(
+            sortedTherapists.firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }?.id
+                ?: sortedTherapists.firstOrNull()?.id
         )
     }
+
+    var selectedSecondaryTherapistId by remember {
+        mutableStateOf(
+            sortedTherapists.filter { it.id != selectedTherapistId }
+                .firstOrNull { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }?.id
+                ?: sortedTherapists.filter { it.id != selectedTherapistId }.firstOrNull()?.id
+        )
+    }
+
+    // When therapists list loads or changes, ensure an initial selection is made if none was selected
+    LaunchedEffect(sortedTherapists) {
+        if (selectedTherapistId == null && sortedTherapists.isNotEmpty()) {
+            selectedTherapistId = sortedTherapists.firstOrNull {
+                it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday
+            }?.id ?: sortedTherapists.first().id
+        }
+        if (selectedSecondaryTherapistId == null && sortedTherapists.size > 1) {
+            selectedSecondaryTherapistId = sortedTherapists.firstOrNull {
+                it.id != selectedTherapistId && it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday
+            }?.id ?: sortedTherapists.firstOrNull { it.id != selectedTherapistId }?.id
+        }
+    }
+
+    val selectedTherapist = sortedTherapists.find { it.id == selectedTherapistId } ?: sortedTherapists.firstOrNull()
+    val selectedSecondaryTherapist = sortedTherapists.find { it.id == selectedSecondaryTherapistId }
 
     // Room Selection
     val filteredRooms = remember(rooms, isCouple) {
@@ -132,11 +161,26 @@ fun CheckInDialog(
             rooms.filter { it.roomType == RoomType.SINGLE.name }
         }
     }
-    val defaultRoom = remember(filteredRooms, preselectedRoom) {
-        preselectedRoom?.takeIf { it.status == RoomStatus.FREE.name }
-            ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name }
+
+    var selectedRoomId by remember {
+        mutableStateOf(
+            preselectedRoom?.id
+                ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name }?.id
+                ?: filteredRooms.firstOrNull()?.id
+        )
     }
-    var selectedRoom by remember(defaultRoom) { mutableStateOf<SpaRoomEntity?>(defaultRoom) }
+
+    LaunchedEffect(filteredRooms) {
+        if (selectedRoomId == null && filteredRooms.isNotEmpty()) {
+            selectedRoomId = preselectedRoom?.id
+                ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name }?.id
+                ?: filteredRooms.first().id
+        }
+    }
+
+    val selectedRoom = filteredRooms.find { it.id == selectedRoomId }
+        ?: filteredRooms.firstOrNull { it.status == RoomStatus.FREE.name }
+        ?: filteredRooms.firstOrNull()
 
     // Total Duration Calculation
     val steamExtra = if (hasSteamBetween) (settings?.steamBetweenExtraMinutes ?: 15) else 0
@@ -152,7 +196,7 @@ fun CheckInDialog(
         Card(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .heightIn(max = 720.dp)
+                .heightIn(max = 740.dp)
                 .testTag("check_in_dialog"),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -243,7 +287,10 @@ fun CheckInDialog(
                     item {
                         OutlinedTextField(
                             value = clientName,
-                            onValueChange = { clientName = it },
+                            onValueChange = {
+                                clientName = it
+                                if (errorMessage != null) errorMessage = null
+                            },
                             label = { Text("Client Name *") },
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                             modifier = Modifier
@@ -317,6 +364,7 @@ fun CheckInDialog(
                                         selectedTreatments.add(treatment)
                                         if (treatment.hasSteamBetween) hasSteamBetween = true
                                     }
+                                    if (errorMessage != null) errorMessage = null
                                 }
                         ) {
                             Row(
@@ -337,6 +385,7 @@ fun CheckInDialog(
                                                 selectedTreatments.removeAll { it.id == treatment.id }
                                                 hasSteamBetween = selectedTreatments.any { it.hasSteamBetween }
                                             }
+                                            if (errorMessage != null) errorMessage = null
                                         }
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -369,7 +418,7 @@ fun CheckInDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                         Icon(Icons.Default.HotTub, contentDescription = null, tint = StatusSteamTeal)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
@@ -397,7 +446,7 @@ fun CheckInDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                         Icon(Icons.Default.HotTub, contentDescription = null, tint = SpaDeepForest)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
@@ -423,92 +472,203 @@ fun CheckInDialog(
 
                     // 5. Therapist Assignment (Queue Order)
                     item {
-                        Text(
-                            text = "Assign Therapist (Daily Queue Order)",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = SpaDarkGreen
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "System auto-recommends the next therapist in line.",
-                            style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Assign Therapist (Daily Rotation Order)",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = SpaDarkGreen
+                                    )
+                                )
+                                Text(
+                                    text = "Auto-suggests next therapist in line. Tap any therapist to assign.",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                )
+                            }
+                            if (onOpenAddTherapist != null) {
+                                IconButton(onClick = onOpenAddTherapist) {
+                                    Icon(Icons.Default.Add, contentDescription = "Add Therapist", tint = SpaDeepForest)
+                                }
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            sortedTherapists.forEachIndexed { index, therapist ->
-                                val isNextUp = therapist.id == sortedTherapists.firstOrNull {
-                                    it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday
-                                }?.id
-                                val isSelected = selectedTherapist?.id == therapist.id
-                                val isAvailable = therapist.status == TherapistStatus.AVAILABLE.name && therapist.isCheckedInToday
+                        if (sortedTherapists.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFFFF3E0),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Text(
+                                        text = "No therapists configured for this branch yet.",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = Color(0xFFE65100))
+                                    )
+                                    Text(
+                                        text = "Add therapists in the Therapists tab or click below.",
+                                        style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                                    )
+                                    if (onOpenAddTherapist != null) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Button(
+                                            onClick = onOpenAddTherapist,
+                                            colors = ButtonDefaults.buttonColors(containerColor = SpaDeepForest),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Add Therapist to Roster")
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                sortedTherapists.forEachIndexed { index, therapist ->
+                                    val isNextUp = therapist.id == sortedTherapists.firstOrNull {
+                                        it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday
+                                    }?.id
+                                    val isSelected = selectedTherapist?.id == therapist.id
 
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (isSelected) SpaMist else Color.White,
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        if (isSelected) 2.dp else 1.dp,
-                                        if (isSelected) SpaDeepForest else SpaCardBorder
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable(enabled = isAvailable) { selectedTherapist = therapist }
-                                ) {
-                                    Row(
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isSelected) SpaMist else Color.White,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            if (isSelected) 2.dp else 1.dp,
+                                            if (isSelected) SpaDeepForest else SpaCardBorder
+                                        ),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = if (isNextUp) SpaGoldDark else Color.LightGray,
-                                                contentColor = Color.White
-                                            ) {
-                                                Text(
-                                                    text = "#${therapist.orderIndex}",
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
-                                                )
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable {
+                                                selectedTherapistId = therapist.id
+                                                if (errorMessage != null) errorMessage = null
                                             }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Column {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                            .testTag("checkin_therapist_${therapist.id}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = if (isNextUp) SpaGoldDark else if (isSelected) SpaDeepForest else Color(0xFFECEFF1),
+                                                    contentColor = if (isNextUp || isSelected) Color.White else Color.DarkGray
+                                                ) {
                                                     Text(
-                                                        text = therapist.name,
-                                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                                        text = "#${therapist.orderIndex}",
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                                                     )
-                                                    if (isNextUp) {
-                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                }
+
+                                                Spacer(modifier = Modifier.width(10.dp))
+
+                                                Column {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = therapist.name,
+                                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = SpaDarkGreen
+                                                            )
+                                                        )
+                                                        if (isNextUp) {
+                                                            Spacer(modifier = Modifier.width(6.dp))
+                                                            Surface(
+                                                                shape = RoundedCornerShape(4.dp),
+                                                                color = Color(0xFFE8F5E9)
+                                                            ) {
+                                                                Text(
+                                                                    text = "NEXT UP",
+                                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                                        color = StatusAvailableGreen,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        fontSize = 10.sp
+                                                                    ),
+                                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Spacer(modifier = Modifier.height(2.dp))
+
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                    ) {
                                                         Surface(
                                                             shape = RoundedCornerShape(4.dp),
-                                                            color = Color(0xFFE8F5E9)
+                                                            color = when (therapist.status) {
+                                                                TherapistStatus.AVAILABLE.name -> Color(0xFFE8F5E9)
+                                                                TherapistStatus.IN_ROOM.name -> Color(0xFFE3F2FD)
+                                                                TherapistStatus.BOOKED.name -> Color(0xFFFFF3E0)
+                                                                else -> Color(0xFFEEEEEE)
+                                                            }
                                                         ) {
                                                             Text(
-                                                                text = "NEXT UP",
+                                                                text = when (therapist.status) {
+                                                                    TherapistStatus.IN_ROOM.name -> "In Room: ${therapist.currentRoomName ?: "Treating"}"
+                                                                    TherapistStatus.BOOKED.name -> "Pre-Booked"
+                                                                    TherapistStatus.ON_BREAK.name -> "On Break"
+                                                                    else -> "Available"
+                                                                },
                                                                 style = MaterialTheme.typography.labelSmall.copy(
-                                                                    color = StatusAvailableGreen,
-                                                                    fontWeight = FontWeight.Bold
+                                                                    color = when (therapist.status) {
+                                                                        TherapistStatus.AVAILABLE.name -> StatusAvailableGreen
+                                                                        TherapistStatus.IN_ROOM.name -> Color(0xFF1565C0)
+                                                                        TherapistStatus.BOOKED.name -> Color(0xFFE65100)
+                                                                        else -> Color.DarkGray
+                                                                    },
+                                                                    fontWeight = FontWeight.Medium
                                                                 ),
-                                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+
+                                                        if (therapist.specialties.isNotBlank()) {
+                                                            Text(
+                                                                text = "• ${therapist.specialties}",
+                                                                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray),
+                                                                maxLines = 1
                                                             )
                                                         }
                                                     }
                                                 }
-                                                Text(
-                                                    text = "${therapist.status} • ${therapist.specialties}",
-                                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-                                                )
                                             }
-                                        }
 
-                                        if (isSelected) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = SpaDeepForest)
+                                            // Radio selection circle
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(26.dp)
+                                                    .clip(CircleShape)
+                                                    .background(if (isSelected) SpaDeepForest else Color(0xFFEEEEEE)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                if (isSelected) {
+                                                    Icon(
+                                                        Icons.Default.Check,
+                                                        contentDescription = "Selected Therapist",
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -521,13 +681,18 @@ fun CheckInDialog(
                         item {
                             Text(
                                 text = "Second Therapist for Couple Suite",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = SpaDarkGreen)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Choose secondary therapist assisting the couple session.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
                             )
                             Spacer(modifier = Modifier.height(6.dp))
 
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 sortedTherapists.filter { it.id != selectedTherapist?.id }.forEach { therapist ->
-                                    val isSelected = selectedSecondaryTherapist?.id == therapist.id
+                                    val isSelected = selectedSecondaryTherapistId == therapist.id
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = if (isSelected) SpaMist else Color.White,
@@ -537,8 +702,10 @@ fun CheckInDialog(
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clickable(enabled = therapist.status == TherapistStatus.AVAILABLE.name && therapist.isCheckedInToday) {
-                                                selectedSecondaryTherapist = therapist
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                selectedSecondaryTherapistId = therapist.id
+                                                if (errorMessage != null) errorMessage = null
                                             }
                                     ) {
                                         Row(
@@ -548,8 +715,24 @@ fun CheckInDialog(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(therapist.name, style = MaterialTheme.typography.bodyMedium)
-                                            if (isSelected) Icon(Icons.Default.Check, contentDescription = null, tint = SpaDeepForest)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = Color(0xFFECEFF1)
+                                                ) {
+                                                    Text(
+                                                        text = "#${therapist.orderIndex}",
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                                        style = MaterialTheme.typography.labelSmall
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(therapist.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                            }
+
+                                            if (isSelected) {
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = SpaDeepForest)
+                                            }
                                         }
                                     }
                                 }
@@ -561,54 +744,96 @@ fun CheckInDialog(
                     item {
                         Text(
                             text = if (isCouple) "Select Couple Room" else "Select Single Room",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = SpaDarkGreen)
                         )
                         Spacer(modifier = Modifier.height(6.dp))
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            filteredRooms.forEach { room ->
-                                val isFree = room.status == RoomStatus.FREE.name
-                                val isSelected = selectedRoom?.id == room.id
-
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (isSelected) SpaMist else Color.White,
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        if (isSelected) 2.dp else 1.dp,
-                                        if (isSelected) SpaDeepForest else SpaCardBorder
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable(enabled = isFree) { selectedRoom = room }
+                        val allRoomsOccupied = filteredRooms.isNotEmpty() && filteredRooms.none { it.status == RoomStatus.FREE.name }
+                        if (allRoomsOccupied) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFFFFF8E1),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
+                                    Icon(Icons.Default.MeetingRoom, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "All suites are currently occupied. Client will be checked into Reception Waiting Lounge and notified as rooms become free.",
+                                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFFBF360C), fontWeight = FontWeight.Medium)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (filteredRooms.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color(0xFFFFF3E0),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "No ${if (isCouple) "couple" else "single"} rooms found for this branch. Please add one in Catalog.",
+                                    modifier = Modifier.padding(10.dp),
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFFE65100))
+                                )
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                filteredRooms.forEach { room ->
+                                    val isFree = room.status == RoomStatus.FREE.name
+                                    val isSelected = selectedRoom?.id == room.id
+
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isSelected) SpaMist else Color.White,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            if (isSelected) 2.dp else 1.dp,
+                                            if (isSelected) SpaDeepForest else SpaCardBorder
+                                        ),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(10.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.MeetingRoom,
-                                                contentDescription = null,
-                                                tint = if (isFree) StatusAvailableGreen else Color.Gray,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Column {
-                                                Text(room.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                                                Text(
-                                                    text = if (isFree) "Available Now" else room.status.lowercase().replace('_', ' '),
-                                                    style = MaterialTheme.typography.bodySmall.copy(
-                                                        color = if (isFree) StatusAvailableGreen else Color(0xFFC62828)
-                                                    )
-                                                )
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                selectedRoomId = room.id
+                                                if (errorMessage != null) errorMessage = null
                                             }
-                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(10.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.MeetingRoom,
+                                                    contentDescription = null,
+                                                    tint = if (isFree) StatusAvailableGreen else StatusFinishingSoonAmber,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(room.name, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                                    Text(
+                                                        text = if (isFree) "Available Now" else room.status.lowercase().replace('_', ' '),
+                                                        style = MaterialTheme.typography.bodySmall.copy(
+                                                            color = if (isFree) StatusAvailableGreen else Color(0xFFC62828)
+                                                        )
+                                                    )
+                                                }
+                                            }
 
-                                        if (isSelected) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = SpaDeepForest)
+                                            if (isSelected) {
+                                                Icon(Icons.Default.Check, contentDescription = null, tint = SpaDeepForest)
+                                            }
                                         }
                                     }
                                 }
@@ -631,12 +856,20 @@ fun CheckInDialog(
 
                 // Error alert
                 if (errorMessage != null) {
-                    Text(
-                        text = errorMessage ?: "",
-                        color = Color.Red,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFFFEBEE),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = errorMessage ?: "",
+                            color = Color(0xFFC62828),
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -654,13 +887,13 @@ fun CheckInDialog(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Total Treatment Time: $totalTreatmentDuration min",
+                                text = "Total Time: $totalTreatmentDuration min",
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = SpaDarkGreen)
                             )
                             Text(
-                                text = "${selectedTreatments.size} treatments • Est. $${totalCost.toInt()}",
+                                text = "${selectedTreatments.size} treatments • Therapist: ${selectedTherapist?.name ?: "None"}",
                                 style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
                             )
                         }
@@ -675,20 +908,21 @@ fun CheckInDialog(
                                     errorMessage = "Please select at least one treatment"
                                     return@Button
                                 }
-                                val therapist = selectedTherapist
-                                if (therapist == null || therapist.status != TherapistStatus.AVAILABLE.name || !therapist.isCheckedInToday) {
-                                    errorMessage = "No available therapist selected. Update the daily roster or wait for a therapist."
+
+                                val therapist = selectedTherapist ?: sortedTherapists.firstOrNull() ?: therapists.firstOrNull()
+                                if (therapist == null) {
+                                    errorMessage = "Please select an assigned therapist from the list above (or add one to today's roster)."
                                     return@Button
                                 }
-                                if (isCouple && (selectedSecondaryTherapist == null ||
-                                        selectedSecondaryTherapist?.status != TherapistStatus.AVAILABLE.name ||
-                                        selectedSecondaryTherapist?.isCheckedInToday != true)) {
-                                    errorMessage = "Select a second available therapist for this couples visit."
+
+                                if (isCouple && selectedSecondaryTherapist == null && sortedTherapists.size > 1) {
+                                    errorMessage = "Please select a second therapist for the couple visit."
                                     return@Button
                                 }
-                                val room = selectedRoom
-                                if (room == null || room.status != RoomStatus.FREE.name) {
-                                    errorMessage = "No suitable room is available now. Check the Front Desk wait-time board and assign this client when a room is free."
+
+                                val room = selectedRoom ?: filteredRooms.firstOrNull() ?: rooms.firstOrNull()
+                                if (room == null) {
+                                    errorMessage = "Please select an assigned room or add one in Catalog."
                                     return@Button
                                 }
 

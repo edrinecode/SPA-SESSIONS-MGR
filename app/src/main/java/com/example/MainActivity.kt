@@ -350,7 +350,10 @@ fun SpaApp(viewModel: SpaViewModel = viewModel()) {
                     onStartTreatment = { id -> viewModel.startTreatment(id) },
                     onCompleteTreatment = { id -> viewModel.completeTreatment(id) },
                     onAddOvertime = { id, mins -> viewModel.addOvertime(id, mins) },
-                    onTransitionPreSteam = { id -> viewModel.transitionPreSteamToRoom(id) }
+                    onTransitionPreSteam = { id -> viewModel.transitionPreSteamToRoom(id) },
+                    onSeatWaitingClient = { sessionId, roomId -> viewModel.seatWaitingClientInRoom(sessionId, roomId) },
+                    onSendWaitingToSteam = { sessionId -> viewModel.sendWaitingClientToSteam(sessionId) },
+                    onCancelWaitingSession = { sessionId -> viewModel.cancelWaitingSession(sessionId) }
                 )
                 1 -> TherapistQueueScreen(
                     therapists = therapists,
@@ -394,6 +397,7 @@ fun SpaApp(viewModel: SpaViewModel = viewModel()) {
         treatments = treatments,
         settings = settings,
         onDismiss = { viewModel.closeCheckInDialog() },
+        onOpenAddTherapist = { viewModel.openAddTherapistDialog() },
         onConfirmCheckIn = { name, phone, isCouple, secName, selectedTreatments, therapist, secTherapist, room, hasSteam, hasPreSteam, cardNum, notes ->
             viewModel.checkInClient(
                 clientName = name,

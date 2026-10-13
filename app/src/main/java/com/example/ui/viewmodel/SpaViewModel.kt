@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
@@ -27,15 +28,7 @@ import kotlinx.coroutines.launch
 
 class SpaViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository: SpaRepository
-
-    init {
-        val database = SpaDatabase.getDatabase(application)
-        repository = SpaRepository(database.spaDao())
-        viewModelScope.launch {
-            repository.ensureDefaultData()
-        }
-    }
+    private val repository: SpaRepository = SpaRepository(SpaDatabase.getDatabase(application).spaDao())
 
     private val _selectedBranchId = MutableStateFlow("branch_main")
     val selectedBranchId: StateFlow<String> = _selectedBranchId.asStateFlow()
@@ -121,6 +114,20 @@ class SpaViewModel(application: Application) : AndroidViewModel(application) {
     val suggestedCardNumber = _suggestedCardNumber.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            repository.ensureDefaultData()
+            val existing = repository.getAllBranches().first()
+            if (existing.isNotEmpty() && existing.none { it.id == _selectedBranchId.value }) {
+                _selectedBranchId.value = existing.first().id
+            }
+        }
+        viewModelScope.launch {
+            branches.collect { branchList ->
+                if (branchList.isNotEmpty() && branchList.none { it.id == _selectedBranchId.value }) {
+                    _selectedBranchId.value = branchList.first().id
+                }
+            }
+        }
         // Re-evaluate wait time whenever rooms, sessions, therapists, or branch change
         viewModelScope.launch {
             combine(rooms, activeSessions, therapists, _selectedBranchId) { _, _, _, branchId ->
@@ -135,6 +142,8 @@ class SpaViewModel(application: Application) : AndroidViewModel(application) {
                 .collect { (now, branchId) -> repository.releaseRoomsAfterCleaning(branchId, now) }
         }
     }
+
+
 
     private suspend fun refreshWaitTimeEstimate(branchId: String) {
         val estimate = repository.calculateWaitTimeInfo(branchId)
@@ -260,6 +269,27 @@ class SpaViewModel(application: Application) : AndroidViewModel(application) {
     fun addOvertime(sessionId: String, minutes: Int) {
         viewModelScope.launch {
             repository.addOvertime(sessionId, minutes)
+            refreshWaitTimeEstimate(_selectedBranchId.value)
+        }
+    }
+
+    fun seatWaitingClientInRoom(sessionId: String, roomId: String) {
+        viewModelScope.launch {
+            repository.seatWaitingClientInRoom(sessionId, roomId)
+            refreshWaitTimeEstimate(_selectedBranchId.value)
+        }
+    }
+
+    fun sendWaitingClientToSteam(sessionId: String) {
+        viewModelScope.launch {
+            repository.sendWaitingClientToSteam(sessionId)
+            refreshWaitTimeEstimate(_selectedBranchId.value)
+        }
+    }
+
+    fun cancelWaitingSession(sessionId: String) {
+        viewModelScope.launch {
+            repository.cancelWaitingSession(sessionId)
             refreshWaitTimeEstimate(_selectedBranchId.value)
         }
     }

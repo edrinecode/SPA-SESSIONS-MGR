@@ -88,16 +88,26 @@ fun WaitTimeBanner(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "All Treatment Rooms Occupied",
+                            text = "All Treatment Suites Occupied",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFB71C1C)
                             )
                         )
-                        Text(
-                            text = "Walk-in clients will have a waiting queue.",
-                            style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF5D4037))
-                        )
+                        if (estimate.waitingClientsCount > 0) {
+                            Text(
+                                text = "${estimate.waitingClientsCount} client(s) currently waiting in lounge.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFD84315)
+                                )
+                            )
+                        } else {
+                            Text(
+                                text = "Walk-in clients will be queued in reception.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF5D4037))
+                            )
+                        }
                     }
 
                     // Large Wait Time Pill
@@ -111,11 +121,11 @@ fun WaitTimeBanner(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text(
-                                text = "EST. WAIT",
+                                text = if (estimate.waitingClientsCount > 0) "WALK-IN WAIT" else "EST. WAIT",
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
                             )
                             Text(
-                                text = "~${estimate.minutesUntilEarliestRoomFree} MIN",
+                                text = "~${if (estimate.waitingClientsCount > 0) estimate.nextWalkInWaitMinutes else estimate.minutesUntilEarliestRoomFree} MIN",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                         }
@@ -147,9 +157,19 @@ fun WaitTimeBanner(
                                 text = estimate.earliestRoomFreeName ?: "Active Session",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = SpaDarkGreen)
                             )
+                            if (estimate.earliestRoomTherapistName != null) {
+                                Text(
+                                    text = " (with ${estimate.earliestRoomTherapistName})",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                )
+                            }
+                        }
+
+                        if (estimate.waitingClientsCount > 0) {
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = " (with ${estimate.earliestRoomTherapistName ?: "Therapist"})",
-                                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                text = "Queue status: #1 in line waits ~${estimate.minutesUntilEarliestRoomFree}m. New walk-in waits ~${estimate.nextWalkInWaitMinutes}m.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFFE65100), fontWeight = FontWeight.Medium)
                             )
                         }
 

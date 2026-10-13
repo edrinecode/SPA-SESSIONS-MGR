@@ -16,10 +16,10 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun `read string from context matches SpaFlow`() {
+    fun `read string from context matches SPA Session Manager`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("SpaFlow", appName)
+        assertEquals("SPA Session Manager", appName)
     }
 
     @Test

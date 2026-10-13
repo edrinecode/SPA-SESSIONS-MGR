@@ -17,17 +17,29 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.util.UUID
 
+data class QueuedClientWaitEstimate(
+    val sessionId: String,
+    val queuePosition: Int,
+    val estimatedWaitMinutes: Int,
+    val targetRoomName: String,
+    val assignedTherapistName: String,
+    val adviceMessage: String
+)
+
 data class WaitTimeEstimate(
     val areAllRoomsBusy: Boolean,
     val totalRooms: Int,
     val freeRoomsCount: Int,
     val inUseRoomsCount: Int,
+    val waitingClientsCount: Int = 0,
     val earliestRoomFreeName: String?,
     val earliestRoomTherapistName: String?,
     val minutesUntilEarliestRoomFree: Int,
+    val nextWalkInWaitMinutes: Int = 0,
     val nextTherapistInTurn: TherapistEntity?,
     val steamLoungeCapacityAvailable: Boolean,
-    val adviceMessage: String
+    val adviceMessage: String,
+    val clientWaitEstimates: Map<String, QueuedClientWaitEstimate> = emptyMap()
 )
 
 class SpaRepository(private val dao: SpaDao) {
@@ -52,18 +64,64 @@ class SpaRepository(private val dao: SpaDao) {
 
     suspend fun ensureDefaultData() {
         val branches = dao.getAllBranches().first()
-        if (branches.isEmpty()) {
-            val branchId = "branch_main"
+        val branchId = if (branches.isEmpty()) {
+            val defaultId = "branch_main"
             dao.insertBranch(
                 BranchEntity(
-                    id = branchId,
-                    name = "Main Branch",
+                    id = defaultId,
+                    name = "Positive Emotions Fitness and Spa",
                     isDefault = true
                 )
             )
-            // Keep first launch honest: configure the spa's real rooms, treatments,
-            // durations, and daily therapist roster in the app instead of showing demo data.
-            dao.insertOrUpdateSettings(BranchSettingsEntity(branchId = branchId))
+            dao.insertOrUpdateSettings(BranchSettingsEntity(branchId = defaultId))
+            defaultId
+        } else {
+            branches.first().id
+        }
+
+        // Populate rooms if branch has none
+        val existingRooms = dao.getRoomsForBranch(branchId).first()
+        if (existingRooms.isEmpty()) {
+            dao.insertRooms(
+                listOf(
+                    SpaRoomEntity("room_1", branchId, "Room 1 (Single Suite)", RoomType.SINGLE.name, capacity = 1),
+                    SpaRoomEntity("room_2", branchId, "Room 2 (Single Suite)", RoomType.SINGLE.name, capacity = 1),
+                    SpaRoomEntity("room_3", branchId, "Room 3 (Couple Suite)", RoomType.COUPLE.name, capacity = 2),
+                    SpaRoomEntity("room_4", branchId, "Room 4 (Couple Suite)", RoomType.COUPLE.name, capacity = 2),
+                    SpaRoomEntity("room_steam", branchId, "Thermal Steam Lounge", RoomType.STEAM_BATH.name, capacity = 6)
+                )
+            )
+        }
+
+        // Populate therapists if branch has none (in manager rotation order)
+        val existingTherapists = dao.getTherapistsForBranch(branchId).first()
+        if (existingTherapists.isEmpty()) {
+            dao.insertTherapists(
+                listOf(
+                    TherapistEntity("th_1", branchId, "Maya Lin", specialties = "Swedish, Deep Tissue", orderIndex = 1),
+                    TherapistEntity("th_2", branchId, "David Vance", specialties = "Sports, Reflexology", orderIndex = 2),
+                    TherapistEntity("th_3", branchId, "Sarah Jenkins", specialties = "Aromatherapy, Hot Stone", orderIndex = 3),
+                    TherapistEntity("th_4", branchId, "Elena Cruz", specialties = "Couple Massage, Body Scrub", orderIndex = 4),
+                    TherapistEntity("th_5", branchId, "John Kamau", specialties = "Deep Tissue, Steam Therapy", orderIndex = 5)
+                )
+            )
+        }
+
+        // Populate treatments if branch has none
+        val existingTreatments = dao.getTreatmentsForBranch(branchId).first()
+        if (existingTreatments.isEmpty()) {
+            dao.insertTreatments(
+                listOf(
+                    TreatmentEntity("tr_1", branchId, "Swedish Relaxing Massage", category = "Massage", durationMinutes = 60, price = 50.0),
+                    TreatmentEntity("tr_2", branchId, "Deep Tissue Therapy", category = "Massage", durationMinutes = 75, price = 65.0, hasSteamBetween = true),
+                    TreatmentEntity("tr_3", branchId, "Aromatherapy Wellness", category = "Massage", durationMinutes = 60, price = 55.0),
+                    TreatmentEntity("tr_4", branchId, "Hot Stone Deluxe", category = "Therapy", durationMinutes = 90, price = 80.0, hasSteamBetween = true),
+                    TreatmentEntity("tr_5", branchId, "Couple Harmony Massage", category = "Couple", durationMinutes = 90, price = 120.0, hasSteamBetween = true),
+                    TreatmentEntity("tr_6", branchId, "Body Scrub & Steam Session", category = "Body Care", durationMinutes = 60, price = 50.0, hasSteamBetween = true),
+                    TreatmentEntity("tr_7", branchId, "Express Back & Neck Relief", category = "Express", durationMinutes = 30, price = 30.0),
+                    TreatmentEntity("tr_8", branchId, "Thermal Steam Bath", category = "Steam Bath", durationMinutes = 30, price = 25.0)
+                )
+            )
         }
     }
 
@@ -110,10 +168,14 @@ class SpaRepository(private val dao: SpaDao) {
         val sessionId = "sess_${UUID.randomUUID().toString().take(8)}"
         val now = System.currentTimeMillis()
 
-        val initialStatus = if (hasPreSteam) {
-            SessionStatus.IN_PRE_STEAM.name
-        } else {
-            SessionStatus.READY_FOR_ROOM.name
+        val isTargetRoomFree = room.status == RoomStatus.FREE.name &&
+                (room.cleaningUntilEpoch ?: 0L) <= now &&
+                room.currentSessionId == null
+
+        val initialStatus = when {
+            hasPreSteam -> SessionStatus.IN_PRE_STEAM.name
+            isTargetRoomFree -> SessionStatus.READY_FOR_ROOM.name
+            else -> SessionStatus.WAITING.name
         }
 
         val session = ClientSessionEntity(
@@ -138,15 +200,15 @@ class SpaRepository(private val dao: SpaDao) {
             preSteamStartedAt = if (hasPreSteam) now else null,
             totalDurationMinutes = totalMinutes,
             checkInTime = now,
-            startedAt = null, // Will start when therapist calls receptionist!
+            startedAt = null,
             status = initialStatus,
             notes = notes
         )
 
         dao.insertSession(session)
 
-        // If not doing pre-steam, room and therapist are claimed right away
-        if (!hasPreSteam) {
+        // Room and therapist updates depending on availability:
+        if (isTargetRoomFree && !hasPreSteam) {
             dao.updateRoom(
                 room.copy(
                     status = RoomStatus.IN_USE.name,
@@ -169,15 +231,15 @@ class SpaRepository(private val dao: SpaDao) {
                     )
                 )
             }
-        } else {
-            // Client is in pre-steam. Hold the selected room and therapist for this visit
-            // so another check-in cannot claim the same resources.
-            dao.updateRoom(
-                room.copy(
-                    status = RoomStatus.RESERVED.name,
-                    currentSessionId = sessionId
+        } else if (hasPreSteam) {
+            if (isTargetRoomFree) {
+                dao.updateRoom(
+                    room.copy(
+                        status = RoomStatus.RESERVED.name,
+                        currentSessionId = sessionId
+                    )
                 )
-            )
+            }
             dao.updateTherapist(
                 therapist.copy(
                     status = TherapistStatus.BOOKED.name,
@@ -194,9 +256,72 @@ class SpaRepository(private val dao: SpaDao) {
                     )
                 )
             }
+        } else {
+            // Room is occupied: client waits in queue
+            dao.updateTherapist(
+                therapist.copy(
+                    status = if (therapist.status == TherapistStatus.AVAILABLE.name) TherapistStatus.BOOKED.name else therapist.status,
+                    activeSessionId = sessionId
+                )
+            )
         }
 
         return session
+    }
+
+    suspend fun seatWaitingClientInRoom(sessionId: String, targetRoomId: String) {
+        val session = dao.getSessionById(sessionId) ?: return
+        val targetRoom = dao.getRoomById(targetRoomId) ?: return
+        val therapist = dao.getTherapistById(session.therapistId)
+
+        val updatedSession = session.copy(
+            roomId = targetRoom.id,
+            roomName = targetRoom.name,
+            status = SessionStatus.READY_FOR_ROOM.name
+        )
+        dao.updateSession(updatedSession)
+
+        dao.updateRoom(
+            targetRoom.copy(
+                status = RoomStatus.IN_USE.name,
+                currentSessionId = sessionId,
+                cleaningUntilEpoch = null
+            )
+        )
+
+        if (therapist != null) {
+            dao.updateTherapist(
+                therapist.copy(
+                    status = TherapistStatus.IN_ROOM.name,
+                    activeSessionId = sessionId,
+                    currentRoomName = targetRoom.name
+                )
+            )
+        }
+    }
+
+    suspend fun sendWaitingClientToSteam(sessionId: String) {
+        val session = dao.getSessionById(sessionId) ?: return
+        val updatedSession = session.copy(
+            status = SessionStatus.IN_PRE_STEAM.name,
+            preSteamStartedAt = System.currentTimeMillis()
+        )
+        dao.updateSession(updatedSession)
+    }
+
+    suspend fun cancelWaitingSession(sessionId: String) {
+        val session = dao.getSessionById(sessionId) ?: return
+        dao.updateSession(session.copy(status = SessionStatus.CANCELLED.name))
+
+        val room = dao.getRoomById(session.roomId)
+        if (room != null && room.currentSessionId == sessionId) {
+            dao.updateRoom(room.copy(status = RoomStatus.FREE.name, currentSessionId = null))
+        }
+
+        val therapist = dao.getTherapistById(session.therapistId)
+        if (therapist != null && therapist.activeSessionId == sessionId) {
+            dao.updateTherapist(therapist.copy(status = TherapistStatus.AVAILABLE.name, activeSessionId = null, currentRoomName = null))
+        }
     }
 
     suspend fun transitionPreSteamToRoom(sessionId: String) {
@@ -420,13 +545,17 @@ class SpaRepository(private val dao: SpaDao) {
         dao.insertOrUpdateSettings(BranchSettingsEntity(branchId = branch.id))
     }
 
-    // Wait Time & Smart Receptionist Calculation
+    // Wait Time & Smart Receptionist Multi-Client Simulation Calculation
     suspend fun calculateWaitTimeInfo(branchId: String): WaitTimeEstimate {
-        val rooms = dao.getRoomsForBranch(branchId).first().filter { it.roomType != RoomType.STEAM_BATH.name }
+        val allBranchRooms = dao.getRoomsForBranch(branchId).first()
+        val rooms = allBranchRooms.filter { it.roomType != RoomType.STEAM_BATH.name }
         val activeSessions = dao.getActiveSessionsForBranch(branchId).first()
         val therapists = dao.getTherapistsForBranch(branchId).first()
 
         val now = System.currentTimeMillis()
+        val settings = dao.getSettingsSync(branchId) ?: BranchSettingsEntity(branchId)
+        val turnoverMs = settings.roomCleaningBufferMinutes.coerceAtLeast(0) * 60 * 1000L
+
         val freeRooms = rooms.filter {
             it.status == RoomStatus.FREE.name && (it.cleaningUntilEpoch ?: 0L) <= now
         }
@@ -436,45 +565,115 @@ class SpaRepository(private val dao: SpaDao) {
             .filter { it.status == TherapistStatus.AVAILABLE.name && it.isCheckedInToday }
             .minByOrNull { it.orderIndex }
 
-        // Find which in-use room is freeing up soonest
-        var earliestRemainingMinutes = Int.MAX_VALUE
+        // Track when each room will be free
+        val roomAvailabilityMap = mutableMapOf<String, Long>()
+        for (room in rooms) {
+            when (room.status) {
+                RoomStatus.FREE.name -> {
+                    roomAvailabilityMap[room.id] = now
+                }
+                RoomStatus.CLEANING.name -> {
+                    val remainingMs = ((room.cleaningUntilEpoch ?: now) - now).coerceAtLeast(0L)
+                    roomAvailabilityMap[room.id] = now + remainingMs
+                }
+                RoomStatus.IN_USE.name -> {
+                    val inTreatmentSession = activeSessions.find {
+                        it.roomId == room.id && it.status == SessionStatus.IN_TREATMENT.name
+                    }
+                    if (inTreatmentSession != null) {
+                        val startTime = inTreatmentSession.startedAt ?: inTreatmentSession.checkInTime
+                        val totalAllowedMs = (inTreatmentSession.totalDurationMinutes + inTreatmentSession.addedOvertimeMinutes) * 60 * 1000L
+                        val elapsedMs = now - startTime
+                        val remainingMs = (totalAllowedMs - elapsedMs).coerceAtLeast(0L)
+                        roomAvailabilityMap[room.id] = now + remainingMs + turnoverMs
+                    } else {
+                        // In room but not started yet (e.g. READY_FOR_ROOM)
+                        val readySession = activeSessions.find { it.roomId == room.id }
+                        val expectedDur = ((readySession?.totalDurationMinutes ?: 60) * 60 * 1000L)
+                        roomAvailabilityMap[room.id] = now + expectedDur + turnoverMs
+                    }
+                }
+                RoomStatus.RESERVED.name -> {
+                    roomAvailabilityMap[room.id] = now + (15 * 60 * 1000L)
+                }
+                else -> {
+                    roomAvailabilityMap[room.id] = now
+                }
+            }
+        }
+
+        // Multi-client queue simulation:
+        // Collect all clients waiting in lounge or pre-steam
+        val waitingSessions = activeSessions
+            .filter { it.status == SessionStatus.WAITING.name || it.status == SessionStatus.IN_PRE_STEAM.name }
+            .sortedBy { it.checkInTime }
+
+        val simulatedTimeline = roomAvailabilityMap.toMutableMap()
+        val clientWaitEstimates = mutableMapOf<String, QueuedClientWaitEstimate>()
+
         var earliestRoomName: String? = null
         var earliestTherapistName: String? = null
+        var earliestWaitMinutes = 0
 
-        // Rooms already in turnover are not free yet, but are often the next usable option.
-        rooms.filter { it.status == RoomStatus.CLEANING.name }.forEach { room ->
-            val remainingMs = ((room.cleaningUntilEpoch ?: now) - now).coerceAtLeast(0L)
-            val remainingMins = ((remainingMs + 59_999L) / 60_000L).toInt()
-            if (remainingMins < earliestRemainingMinutes) {
-                earliestRemainingMinutes = remainingMins
-                earliestRoomName = room.name
-                earliestTherapistName = null
-            }
+        // Find immediately earliest room freeing
+        val earliestEntry = simulatedTimeline.minByOrNull { it.value }
+        if (earliestEntry != null && rooms.isNotEmpty()) {
+            val earliestRoom = rooms.find { it.id == earliestEntry.key }
+            earliestRoomName = earliestRoom?.name
+            val earliestSession = activeSessions.find { it.roomId == earliestEntry.key }
+            earliestTherapistName = earliestSession?.therapistName
+            val waitMs = (earliestEntry.value - now).coerceAtLeast(0L)
+            earliestWaitMinutes = ((waitMs + 59_999L) / 60_000L).toInt()
         }
 
-        val activeInTreatmentSessions = activeSessions.filter { it.status == SessionStatus.IN_TREATMENT.name }
-        val settings = dao.getSettingsSync(branchId) ?: BranchSettingsEntity(branchId)
-        val turnoverMs = settings.roomCleaningBufferMinutes.coerceAtLeast(0) * 60 * 1000L
-        for (session in activeInTreatmentSessions) {
-            val startTime = session.startedAt ?: session.checkInTime
-            val totalAllowedMs = (session.totalDurationMinutes + session.addedOvertimeMinutes) * 60 * 1000L
-            val elapsedMs = now - startTime
-            val remainingMs = (totalAllowedMs - elapsedMs).coerceAtLeast(0L) + turnoverMs
-            val remainingMins = ((remainingMs + 59_999L) / 60_000L).toInt()
+        // Calculate individual wait time for each waiting client in FIFO order
+        waitingSessions.forEachIndexed { index, session ->
+            val queuePos = index + 1
+            // Match room type if couple
+            val candidateRooms = rooms.filter { r ->
+                if (session.isCouple) r.roomType == RoomType.COUPLE.name else true
+            }.ifEmpty { rooms }
 
-            if (remainingMins < earliestRemainingMinutes) {
-                earliestRemainingMinutes = remainingMins
-                earliestRoomName = session.roomName
-                earliestTherapistName = session.therapistName
+            val bestRoom = candidateRooms.minByOrNull { simulatedTimeline[it.id] ?: now } ?: rooms.first()
+            val availableAt = simulatedTimeline[bestRoom.id] ?: now
+            val waitMs = (availableAt - now).coerceAtLeast(0L)
+            val waitMins = if (waitMs <= 0L) 0 else ((waitMs + 59_999L) / 60_000L).toInt()
+            val isReady = waitMins == 0
+
+            val advice = if (isReady) {
+                "${bestRoom.name} is ready now!"
+            } else {
+                "Wait ~$waitMins min • ${bestRoom.name} frees next"
             }
+
+            clientWaitEstimates[session.id] = QueuedClientWaitEstimate(
+                sessionId = session.id,
+                queuePosition = queuePos,
+                estimatedWaitMinutes = waitMins,
+                targetRoomName = bestRoom.name,
+                assignedTherapistName = session.therapistName,
+                adviceMessage = advice
+            )
+
+            // Push forward this room's simulated availability for this client's full treatment duration!
+            val sessionTotalDurationMs = session.totalDurationMinutes * 60 * 1000L
+            simulatedTimeline[bestRoom.id] = availableAt + sessionTotalDurationMs + turnoverMs
         }
 
-        val advice = when {
-            !areAllRoomsBusy -> {
-                "${freeRooms.size} room(s) available now. Next therapist up: ${nextAvailableTherapist?.name ?: "None on deck"}."
+        // Wait time for a brand-new walk-in arriving right now
+        val nextWalkInAvailableAt = rooms.minOfOrNull { simulatedTimeline[it.id] ?: now } ?: now
+        val nextWalkInWaitMs = (nextWalkInAvailableAt - now).coerceAtLeast(0L)
+        val nextWalkInWaitMinutes = if (nextWalkInWaitMs <= 0L) 0 else ((nextWalkInWaitMs + 59_999L) / 60_000L).toInt()
+
+        val adviceMessage = when {
+            !areAllRoomsBusy && waitingSessions.isEmpty() -> {
+                "${freeRooms.size} suite(s) available now. Next therapist up: ${nextAvailableTherapist?.name ?: "None on deck"}."
+            }
+            waitingSessions.isNotEmpty() -> {
+                "${waitingSessions.size} client(s) currently waiting in queue. Next walk-in estimated wait: ~$nextWalkInWaitMinutes min. Recommend 15m Steam Bath while waiting!"
             }
             earliestRoomName != null -> {
-                "All rooms are occupied. Next room free is $earliestRoomName in ~$earliestRemainingMinutes mins (Therapist: $earliestTherapistName). You can recommend the 15-min Steam Bath while waiting!"
+                "All suites busy. Next room free is $earliestRoomName in ~$earliestWaitMinutes min (Therapist: ${earliestTherapistName ?: "Assigned"})."
             }
             else -> {
                 "All rooms currently assigned. Preparing next available slot."
@@ -486,12 +685,15 @@ class SpaRepository(private val dao: SpaDao) {
             totalRooms = rooms.size,
             freeRoomsCount = freeRooms.size,
             inUseRoomsCount = rooms.size - freeRooms.size,
+            waitingClientsCount = waitingSessions.size,
             earliestRoomFreeName = earliestRoomName,
             earliestRoomTherapistName = earliestTherapistName,
-            minutesUntilEarliestRoomFree = if (earliestRemainingMinutes == Int.MAX_VALUE) 0 else earliestRemainingMinutes,
+            minutesUntilEarliestRoomFree = earliestWaitMinutes,
+            nextWalkInWaitMinutes = nextWalkInWaitMinutes,
             nextTherapistInTurn = nextAvailableTherapist,
             steamLoungeCapacityAvailable = true,
-            adviceMessage = advice
+            adviceMessage = adviceMessage,
+            clientWaitEstimates = clientWaitEstimates
         )
     }
 }
