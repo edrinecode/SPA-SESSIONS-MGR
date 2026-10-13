@@ -356,7 +356,10 @@ fun LiveRoomCard(
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
-                        } else if (activeSession.status == SessionStatus.READY_FOR_ROOM.name || activeSession.status == SessionStatus.WAITING.name) {
+                        } else if (activeSession.status == SessionStatus.READY_FOR_ROOM.name ||
+                            activeSession.status == SessionStatus.WAITING.name ||
+                            activeSession.status == SessionStatus.IN_PRE_STEAM.name
+                        ) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -375,7 +378,11 @@ fun LiveRoomCard(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Client assigned to room. Waiting for Therapist call to start timer...",
+                                        text = if (activeSession.status == SessionStatus.IN_PRE_STEAM.name) {
+                                            "Client is in pre-treatment steam. Room is reserved; move client here when ready."
+                                        } else {
+                                            "Client assigned to room. Waiting for Therapist call to start timer..."
+                                        },
                                         style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF5D4037))
                                     )
                                 }
@@ -391,7 +398,9 @@ fun LiveRoomCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (activeSession.status != SessionStatus.IN_TREATMENT.name) {
+                    if (activeSession.status == SessionStatus.READY_FOR_ROOM.name ||
+                        activeSession.status == SessionStatus.WAITING.name
+                    ) {
                         Button(
                             onClick = { onStartTreatment(activeSession.id) },
                             modifier = Modifier
@@ -404,7 +413,7 @@ fun LiveRoomCard(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Therapist Called: Start")
                         }
-                    } else {
+                    } else if (activeSession.status == SessionStatus.IN_TREATMENT.name) {
                         Button(
                             onClick = { onCompleteTreatment(activeSession.id) },
                             modifier = Modifier
@@ -424,6 +433,18 @@ fun LiveRoomCard(
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text("+10m")
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = StatusSteamContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Waiting for client to finish steam",
+                                modifier = Modifier.padding(10.dp),
+                                style = MaterialTheme.typography.labelMedium.copy(color = StatusSteamTeal)
+                            )
                         }
                     }
                 }
@@ -482,19 +503,22 @@ fun LiveRoomCard(
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 )
+                                val minutesLeft = (((room.cleaningUntilEpoch ?: currentTimeEpoch) - currentTimeEpoch)
+                                    .coerceAtLeast(0L) + 59_999L) / 60_000L
                                 Text(
-                                    text = "5-min buffer in progress",
+                                    text = "Available in about ${minutesLeft} min",
                                     style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
                                 )
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = onCheckInClick,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Ready Now")
-                        }
+                        Text(
+                            text = "Room unavailable",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = StatusCleaningPurple,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
                     }
                 }
             }
@@ -510,9 +534,9 @@ fun RoomStatusChip(
 ) {
     val (label, containerColor, contentColor) = when {
         isFinishingSoon -> Triple("Finishing Soon", StatusFinishingSoonContainer, StatusFinishingSoonAmber)
-        hasActiveSession || status == RoomStatus.IN_USE.name -> Triple("In Session", StatusInUseContainer, StatusInUseBlue)
         status == RoomStatus.CLEANING.name -> Triple("Cleaning", StatusCleaningContainer, StatusCleaningPurple)
         status == RoomStatus.RESERVED.name -> Triple("Reserved", Color(0xFFEDE7F6), Color(0xFF512DA8))
+        hasActiveSession || status == RoomStatus.IN_USE.name -> Triple("In Session", StatusInUseContainer, StatusInUseBlue)
         else -> Triple("Available", StatusAvailableContainer, StatusAvailableGreen)
     }
 

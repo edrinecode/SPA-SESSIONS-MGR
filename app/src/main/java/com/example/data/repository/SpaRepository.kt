@@ -53,85 +53,17 @@ class SpaRepository(private val dao: SpaDao) {
     suspend fun ensureDefaultData() {
         val branches = dao.getAllBranches().first()
         if (branches.isEmpty()) {
-            val mainBranchId = "branch_downtown"
-            val highlandBranchId = "branch_highland"
-
-            dao.insertBranches(
-                listOf(
-                    BranchEntity(
-                        id = mainBranchId,
-                        name = "Downtown Oasis Spa",
-                        address = "450 Serenity Ave, Grand Plaza",
-                        phone = "+1 (555) 019-2831",
-                        isDefault = true
-                    ),
-                    BranchEntity(
-                        id = highlandBranchId,
-                        name = "Highland Wellness Retreat",
-                        address = "12 Hilltop Way, Skyline Terrace",
-                        phone = "+1 (555) 014-9844",
-                        isDefault = false
-                    )
+            val branchId = "branch_main"
+            dao.insertBranch(
+                BranchEntity(
+                    id = branchId,
+                    name = "Main Branch",
+                    isDefault = true
                 )
             )
-
-            dao.insertOrUpdateSettings(
-                BranchSettingsEntity(
-                    branchId = mainBranchId,
-                    cardStartNumber = 101,
-                    cardEndNumber = 200,
-                    cardPrefix = "SP-",
-                    steamBetweenExtraMinutes = 15,
-                    defaultPreSteamMinutes = 15,
-                    roomCleaningBufferMinutes = 5,
-                    autoSuggestNextTherapist = true
-                )
-            )
-            dao.insertOrUpdateSettings(
-                BranchSettingsEntity(
-                    branchId = highlandBranchId,
-                    cardStartNumber = 301,
-                    cardEndNumber = 400,
-                    cardPrefix = "HL-",
-                    steamBetweenExtraMinutes = 15,
-                    defaultPreSteamMinutes = 20,
-                    roomCleaningBufferMinutes = 5,
-                    autoSuggestNextTherapist = true
-                )
-            )
-
-            val rooms = listOf(
-                SpaRoomEntity("room_1", mainBranchId, "Room 1 (Serenity Single)", RoomType.SINGLE.name, 1, RoomStatus.FREE.name),
-                SpaRoomEntity("room_2", mainBranchId, "Room 2 (Zen Garden Single)", RoomType.SINGLE.name, 1, RoomStatus.FREE.name),
-                SpaRoomEntity("room_3", mainBranchId, "Room 3 (Bamboo Forest Single)", RoomType.SINGLE.name, 1, RoomStatus.FREE.name),
-                SpaRoomEntity("room_4", mainBranchId, "Room 4 (Lotus Flower Single)", RoomType.SINGLE.name, 1, RoomStatus.FREE.name),
-                SpaRoomEntity("room_5", mainBranchId, "Couples Suite 1 (Harmony)", RoomType.COUPLE.name, 2, RoomStatus.FREE.name),
-                SpaRoomEntity("room_6", mainBranchId, "Couples Suite 2 (Elysium)", RoomType.COUPLE.name, 2, RoomStatus.FREE.name),
-                SpaRoomEntity("room_steam", mainBranchId, "Thermal Steam Bath Lounge", RoomType.STEAM_BATH.name, 6, RoomStatus.FREE.name)
-            )
-            dao.insertRooms(rooms)
-
-            val therapists = listOf(
-                TherapistEntity("th_1", mainBranchId, "Maya Chen", "Deep Tissue, Hot Stone", "555-0101", 1, TherapistStatus.AVAILABLE.name),
-                TherapistEntity("th_2", mainBranchId, "Lucas Miller", "Swedish, Sports Recovery", "555-0102", 2, TherapistStatus.AVAILABLE.name),
-                TherapistEntity("th_3", mainBranchId, "Priya Sharma", "Ayurvedic, Balinese, Scrub", "555-0103", 3, TherapistStatus.AVAILABLE.name),
-                TherapistEntity("th_4", mainBranchId, "Elena Vance", "Facials, Shiatsu", "555-0104", 4, TherapistStatus.AVAILABLE.name),
-                TherapistEntity("th_5", mainBranchId, "Tariq Rahman", "Reflexology, Thai", "555-0105", 5, TherapistStatus.AVAILABLE.name),
-                TherapistEntity("th_6", mainBranchId, "Grace O'Connor", "Couples Rituals, Aromatherapy", "555-0106", 6, TherapistStatus.AVAILABLE.name)
-            )
-            dao.insertTherapists(therapists)
-
-            val treatments = listOf(
-                TreatmentEntity("tr_1", mainBranchId, "Deep Tissue Massage", "Massage", 60, 75.0, "Targeted tension relief"),
-                TreatmentEntity("tr_2", mainBranchId, "Swedish Relaxation Massage", "Massage", 60, 65.0, "Gentle full body relaxation"),
-                TreatmentEntity("tr_3", mainBranchId, "Aromatherapy Bliss Massage", "Massage", 75, 85.0, "Essential oils for tension"),
-                TreatmentEntity("tr_4", mainBranchId, "Hydra-Glow Botanical Facial", "Facial", 45, 55.0, "Deep hydration and glow"),
-                TreatmentEntity("tr_5", mainBranchId, "Himalayan Herbal Body Scrub", "Body Scrub", 45, 60.0, "Mineral exfoliation polish"),
-                TreatmentEntity("tr_6", mainBranchId, "Foot & Leg Reflexology", "Reflexology", 30, 40.0, "Acupressure relief"),
-                TreatmentEntity("tr_7", mainBranchId, "Couples Harmony Ritual", "Couples", 90, 160.0, "Private couple massage suite"),
-                TreatmentEntity("tr_8", mainBranchId, "Royal Renewal Package", "Package", 120, 145.0, "Scrub + Massage + Facial", hasSteamBetween = true)
-            )
-            dao.insertTreatments(treatments)
+            // Keep first launch honest: configure the spa's real rooms, treatments,
+            // durations, and daily therapist roster in the app instead of showing demo data.
+            dao.insertOrUpdateSettings(BranchSettingsEntity(branchId = branchId))
         }
     }
 
@@ -238,7 +170,14 @@ class SpaRepository(private val dao: SpaDao) {
                 )
             }
         } else {
-            // Client is in pre-steam. Therapist is marked booked/pre-assigned
+            // Client is in pre-steam. Hold the selected room and therapist for this visit
+            // so another check-in cannot claim the same resources.
+            dao.updateRoom(
+                room.copy(
+                    status = RoomStatus.RESERVED.name,
+                    currentSessionId = sessionId
+                )
+            )
             dao.updateTherapist(
                 therapist.copy(
                     status = TherapistStatus.BOOKED.name,
@@ -342,9 +281,9 @@ class SpaRepository(private val dao: SpaDao) {
             val bufferMs = settings.roomCleaningBufferMinutes * 60 * 1000L
             dao.updateRoom(
                 room.copy(
-                    status = RoomStatus.FREE.name,
+                    status = if (bufferMs > 0L) RoomStatus.CLEANING.name else RoomStatus.FREE.name,
                     currentSessionId = null,
-                    cleaningUntilEpoch = now + bufferMs
+                    cleaningUntilEpoch = if (bufferMs > 0L) now + bufferMs else null
                 )
             )
         }
@@ -468,6 +407,14 @@ class SpaRepository(private val dao: SpaDao) {
         dao.insertOrUpdateSettings(settings)
     }
 
+    suspend fun releaseRoomsAfterCleaning(branchId: String, now: Long = System.currentTimeMillis()) {
+        dao.getRoomsForBranch(branchId).first()
+            .filter { it.status == RoomStatus.CLEANING.name && (it.cleaningUntilEpoch ?: 0L) <= now }
+            .forEach { room ->
+                dao.updateRoom(room.copy(status = RoomStatus.FREE.name, cleaningUntilEpoch = null))
+            }
+    }
+
     suspend fun addBranch(branch: BranchEntity) {
         dao.insertBranch(branch)
         dao.insertOrUpdateSettings(BranchSettingsEntity(branchId = branch.id))
@@ -479,7 +426,10 @@ class SpaRepository(private val dao: SpaDao) {
         val activeSessions = dao.getActiveSessionsForBranch(branchId).first()
         val therapists = dao.getTherapistsForBranch(branchId).first()
 
-        val freeRooms = rooms.filter { it.status == RoomStatus.FREE.name }
+        val now = System.currentTimeMillis()
+        val freeRooms = rooms.filter {
+            it.status == RoomStatus.FREE.name && (it.cleaningUntilEpoch ?: 0L) <= now
+        }
         val areAllRoomsBusy = freeRooms.isEmpty() && rooms.isNotEmpty()
 
         val nextAvailableTherapist = therapists
@@ -487,18 +437,30 @@ class SpaRepository(private val dao: SpaDao) {
             .minByOrNull { it.orderIndex }
 
         // Find which in-use room is freeing up soonest
-        val now = System.currentTimeMillis()
         var earliestRemainingMinutes = Int.MAX_VALUE
         var earliestRoomName: String? = null
         var earliestTherapistName: String? = null
 
+        // Rooms already in turnover are not free yet, but are often the next usable option.
+        rooms.filter { it.status == RoomStatus.CLEANING.name }.forEach { room ->
+            val remainingMs = ((room.cleaningUntilEpoch ?: now) - now).coerceAtLeast(0L)
+            val remainingMins = ((remainingMs + 59_999L) / 60_000L).toInt()
+            if (remainingMins < earliestRemainingMinutes) {
+                earliestRemainingMinutes = remainingMins
+                earliestRoomName = room.name
+                earliestTherapistName = null
+            }
+        }
+
         val activeInTreatmentSessions = activeSessions.filter { it.status == SessionStatus.IN_TREATMENT.name }
+        val settings = dao.getSettingsSync(branchId) ?: BranchSettingsEntity(branchId)
+        val turnoverMs = settings.roomCleaningBufferMinutes.coerceAtLeast(0) * 60 * 1000L
         for (session in activeInTreatmentSessions) {
             val startTime = session.startedAt ?: session.checkInTime
             val totalAllowedMs = (session.totalDurationMinutes + session.addedOvertimeMinutes) * 60 * 1000L
             val elapsedMs = now - startTime
-            val remainingMs = (totalAllowedMs - elapsedMs).coerceAtLeast(0L)
-            val remainingMins = (remainingMs / 60000L).toInt()
+            val remainingMs = (totalAllowedMs - elapsedMs).coerceAtLeast(0L) + turnoverMs
+            val remainingMins = ((remainingMs + 59_999L) / 60_000L).toInt()
 
             if (remainingMins < earliestRemainingMinutes) {
                 earliestRemainingMinutes = remainingMins
