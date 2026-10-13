@@ -1,0 +1,6 @@
+{
+  "name": "SpaFlow",
+  "description": "Front desk spa management system for client check-ins, therapist queue order, room allocation, live treatment timers, and wait time calculation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
